@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Food Ordering System</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="hero">
+  <div><p class="eyebrow">JAVA • QUEUE • FIFO</p>
+    <h1>Food Ordering System</h1>
+    <p>Order your favourites and track every order.</p></div>
+  <div class="hero-icon">🍔</div>
+</header>
+<main class="container">
+  <section class="stats">
+    <article class="stat"><span>Total orders</span><strong id="totalOrders">0</strong></article>
+    <article class="stat"><span>Pending</span><strong id="pendingOrders">0</strong></article>
+    <article class="stat"><span>Completed</span><strong id="completedOrders">0</strong></article>
+    <article class="stat"><span>Completed sales</span><strong id="totalSales">₹0.00</strong></article>
+  </section>
+  <div id="message" class="message hidden" role="status"></div>
+  <section class="layout">
+    <div class="panel">
+      <div class="section-heading"><div><p class="eyebrow">FRESH & TASTY</p><h2>Food menu</h2></div></div>
+      <div id="menu" class="menu-grid">Loading menu…</div>
+    </div>
+    <div class="panel">
+      <p class="eyebrow">YOUR SELECTION</p><h2>Create an order</h2>
+      <label for="customer">Customer name</label><input id="customer" maxlength="60" placeholder="Enter your name">
+      <div id="quantities"></div>
+      <div class="bill"><span>Estimated total</span><strong id="cartTotal">₹0.00</strong></div>
+      <button id="placeOrder" class="button primary full">Place order</button>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="section-heading"><div><p class="eyebrow">FIRST IN, FIRST OUT</p><h2>Pending order queue</h2></div>
+      <button id="processOrder" class="button primary">Process next order</button></div>
+    <p class="muted">The first order placed is processed first (FIFO).</p><div id="pendingList" class="orders-list"></div>
+  </section>
+  <section class="panel">
+    <div class="section-heading"><div><p class="eyebrow">ORDER HISTORY</p><h2>All orders</h2></div>
+      <button id="refresh" class="button secondary">Refresh</button></div>
+    <div class="table-wrap"><table><thead><tr><th>Order ID</th><th>Customer</th><th>Items</th><th>Total</th><th>Status</th><th>Details</th></tr></thead>
+      <tbody id="allOrders"><tr><td colspan="6">No orders yet.</td></tr></tbody></table></div>
+  </section>
+  <footer>Food Ordering and Order Processing System · Java, HTML and CSS</footer>
+</main>
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-card"><button id="closeModal" class="modal-close">×</button><h2>Order details</h2><div id="modalContent"></div></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+let menu = [];
+const money = n => new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR"}).format(n || 0);
+const emoji = name => ({"Classic Burger":"🍔","Margherita Pizza":"🍕","Veg Sandwich":"🥪","Fried Rice":"🍚","Fresh Juice":"🧃","French Fries":"🍟"})[name] || "🍽️";
+const safe = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+async function api(path, options={}) {
+  const response = await fetch(path, options);
+  const data = await response.json().catch(()=>({}));
+  if (!response.ok) throw new Error(data.error || "Request failed.");
+  return data;
+}
+function message(text, type="success") {
+  $("message").textContent=text; $("message").className="message "+type;
+  setTimeout(()=>$("message").classList.add("hidden"),4000);
+}
+async function loadMenu() {
+  menu = await api("/api/menu");
+  $("menu").innerHTML = menu.map(f=>`<article class="food-card"><div class="food-emoji">${emoji(f.name)}</div><h3>${safe(f.name)}</h3><div class="food-bottom"><span class="price">${money(f.price)}</span><button class="button primary small" data-add="${f.id}">Add +</button></div></article>`).join("");
+  $("quantities").innerHTML = menu.map(f=>`<div class="quantity-row"><label for="q${f.id}">${safe(f.name)} <span>${money(f.price)}</span></label><input id="q${f.id}" type="number" min="0" max="99" value="0"></div>`).join("");
+  $("menu").querySelectorAll("[data-add]").forEach(b=>b.onclick=()=>{
+    const input=$("q"+b.dataset.add); input.value=Number(input.value||0)+1; updateTotal();
+  });
+  menu.forEach(f=>$("q"+f.id).addEventListener("input",updateTotal));
+  updateTotal();
+}
+function updateTotal() {
+  let total=0;
+  menu.forEach(f=>{ let q=Number($("q"+f.id)?.value||0); if(q<0)q=0; total+=f.price*q; });
+  $("cartTotal").textContent=money(total);
+}
+async function placeOrder() {
+  const customer=$("customer").value.trim();
+  if(!customer) return message("Please enter the customer's name.","error");
+  const form=new URLSearchParams(); form.set("customer",customer);
+  let count=0;
+  menu.forEach(f=>{let q=Number($("q"+f.id).value||0); if(!Number.isInteger(q)||q<0||q>99) q=0; form.set("q"+f.id,q); count+=q;});
+  if(!count) return message("Please add at least one food item.","error");
+  try {
+    const order=await api("/api/place",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:form.toString()});
+    $("customer").value=""; menu.forEach(f=>$("q"+f.id).value=0); updateTotal();
+    message(`Order #${order.orderId} placed successfully. Total: ${money(order.total)}.`);
+    await refreshAll();
+  } catch(e){message(e.message,"error");}
+}
+async function processNext() {
+  try {const o=await api("/api/process",{method:"POST"}); message(`Order #${o.orderId} has been processed.`); await refreshAll();}
+  catch(e){message(e.message,"error");}
+}
+async function refreshAll() {
+  try {
+    const [summary,pending,orders]=await Promise.all([api("/api/summary"),api("/api/pending"),api("/api/orders")]);
+    $("totalOrders").textContent=summary.totalOrders; $("pendingOrders").textContent=summary.pendingOrders;
+    $("completedOrders").textContent=summary.completedOrders; $("totalSales").textContent=money(summary.totalSales);
+    $("pendingList").innerHTML=pending.length?pending.map((o,i)=>`<article class="queue-card"><div><strong>#${o.orderId} · ${safe(o.customerName)}</strong><p>Queue position ${i+1} · ${o.items.length} item type(s) · ${money(o.total)}</p></div><span class="status">PENDING</span></article>`).join():'<p class="muted">No pending orders.</p>';
+    $("allOrders").innerHTML=orders.length?orders.slice().reverse().map(o=>`<tr><td>#${o.orderId}</td><td>${safe(o.customerName)}</td><td>${o.items.reduce((s,i)=>s+i.quantity,0)}</td><td>${money(o.total)}</td><td><span class="status ${o.status==="COMPLETED"?"completed":""}">${o.status}</span></td><td><button class="button secondary small" data-view="${o.orderId}">View</button></td></tr>`).join():'<tr><td colspan="6">No orders yet.</td></tr>';
+    $("allOrders").querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>viewOrder(b.dataset.view));
+  } catch(e){message("Could not connect to Java server. Start FoodOrderingServer.java first.","error");}
+}
+async function viewOrder(id) {
+  try {
+    const o=await api("/api/orders/"+id);
+    $("modalContent").innerHTML=`<p><b>Order ID:</b> #${o.orderId}</p><p><b>Customer:</b> ${safe(o.customerName)}</p><p><b>Status:</b> ${o.status}</p>`+
+      o.items.map(i=>`<div class="detail-line"><span>${safe(i.name)} × ${i.quantity}</span><b>${money(i.subtotal)}</b></div>`).join("")+
+      `<div class="detail-line"><b>Total</b><b>${money(o.total)}</b></div>`;
+    $("modal").classList.remove("hidden");
+  } catch(e){message(e.message,"error");}
+}
+$("placeOrder").onclick=placeOrder; $("processOrder").onclick=processNext; $("refresh").onclick=refreshAll;
+$("closeModal").onclick=()=>$("modal").classList.add("hidden");
+$("modal").onclick=e=>{if(e.target===$("modal"))$("modal").classList.add("hidden");};
+(async()=>{try{await loadMenu();await refreshAll();}catch(e){message("Start the Java server, then reload this page.","error");}})();
+</script>
+</body>
+</html>
